@@ -1,0 +1,73 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "app_use"
+dynamic = ["version"]
+description = "A library for controlling Flutter applications via the Dart VM Service"
+readme = "README.md"
+authors = [
+    {name = "Erick Torres"},
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "dart-vm-client==0.0.1.dev4",
+    "pydantic>=2.0.0",
+    "python-dotenv>=0.21.0",
+    "langchain-core>=0.1.0",
+]
+
+[project.optional-dependencies]
+openai = [
+    "langchain-openai>=0.0.1",
+    "openai>=1.0.0",
+]
+groq = [
+    "langchain-groq>=0.0.1",
+    "groq>=0.4.0",
+]
+google = [
+    "google-generativeai>=0.3.0",
+    "langchain-google-vertexai>=0.0.1",
+]
+anthropic = [
+    "anthropic>=0.5.0",
+    "langchain-anthropic>=0.0.1",
+]
+all = [
+    "langchain-openai>=0.0.1",
+    "openai>=1.0.0",
+    "langchain-groq>=0.0.1",
+    "groq>=0.4.0",
+    "google-generativeai>=0.3.0",
+    "langchain-google-vertexai>=0.0.1",
+    "anthropic>=0.5.0",
+    "langchain-anthropic>=0.0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/app-use/app-use"
+"Bug Tracker" = "https://github.com/app-use/app-use/issues"
+Documentation = "https://github.com/app-use/app-use#readme"
+
+[tool.setuptools]
+packages = ["app_use"]
+
+[tool.setuptools.dynamic]
+version = {attr = "app_use.__version__"} 
