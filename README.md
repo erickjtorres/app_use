@@ -1,6 +1,7 @@
 # App Use - AI Control for Mobile Apps
 
-![Screenshot 2025-05-16 at 3 08 10 PM](https://github.com/user-attachments/assets/5d1c6dd1-1089-4344-90bf-dd3c8373d9f5)
+
+![Screenshot 2025-05-16 at 3 09 22 PM](https://github.com/user-attachments/assets/74bec546-cecb-4858-9549-1b02277598f4)
 
 
 
