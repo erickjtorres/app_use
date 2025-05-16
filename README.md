@@ -1,7 +1,8 @@
 # App Use - AI Control for Mobile Apps
 
 
-![Screenshot 2025-05-16 at 3 09 22 PM](https://github.com/user-attachments/assets/74bec546-cecb-4858-9549-1b02277598f4)
+![ChatGPT Image May 16, 2025 at 03_14_14 PM](https://github.com/user-attachments/assets/baccb232-4690-4b47-824b-e77166e23aa7)
+
 
 
 
