@@ -19,7 +19,7 @@ from app_use.controller.views import (
     FindScrollableDescendantAction,
     GetAppStateAction
 )
-from app_use.nodes.app_node import AppNode
+from app_use.nodes.app_node import AppElementNode, NodeState, AppBaseNode
 from app_use.app.app import App
 
 logger = logging.getLogger(__name__)
@@ -65,9 +65,9 @@ class Controller(Generic[Context]):
         )
         async def click_widget(params: ClickWidgetAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
-            success = app.click_widget_by_unique_id(all_nodes, params.unique_id)
+            success = app.click_widget_by_unique_id(node_state, params.unique_id)
             
             if success:
                 msg = f"🖱️ Clicked widget with unique ID {params.unique_id}"
@@ -83,9 +83,9 @@ class Controller(Generic[Context]):
         )
         async def enter_text(params: EnterTextAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
-            success = app.enter_text_with_unique_id(all_nodes, params.unique_id, params.text)
+            success = app.enter_text_with_unique_id(node_state, params.unique_id, params.text)
             
             if success:
                 msg = f"⌨️ Entered text '{params.text}' into widget with unique ID {params.unique_id}"
@@ -101,9 +101,9 @@ class Controller(Generic[Context]):
         )
         async def scroll_into_view(params: ScrollIntoViewAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
-            success = app.scroll_into_view(all_nodes, params.unique_id)
+            success = app.scroll_into_view(node_state, params.unique_id)
             
             if success:
                 msg = f"🔍 Scrolled widget with unique ID {params.unique_id} into view"
@@ -119,14 +119,14 @@ class Controller(Generic[Context]):
         )
         async def scroll_up_or_down(params: ScrollUpOrDownAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
             # Validate direction
             if params.direction not in ["up", "down"]:
                 error_msg = f"Invalid scroll direction: {params.direction}. Must be 'up' or 'down'."
                 return ActionResult(error=error_msg, include_in_memory=True)
                 
-            success = app.scroll_up_or_down(all_nodes, params.unique_id, params.direction)
+            success = app.scroll_up_or_down(node_state, params.unique_id, params.direction)
             
             if success:
                 msg = f"🔍 Scrolled {params.direction} with widget unique ID {params.unique_id}"
@@ -142,7 +142,7 @@ class Controller(Generic[Context]):
         )
         async def scroll_extended(params: ScrollExtendedAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
             # Validate direction
             if params.direction not in ["up", "down"]:
@@ -150,7 +150,7 @@ class Controller(Generic[Context]):
                 return ActionResult(error=error_msg, include_in_memory=True)
                 
             success = app.scroll_up_or_down_extended(
-                all_nodes, 
+                node_state, 
                 params.unique_id, 
                 params.direction, 
                 params.dx, 
@@ -173,14 +173,10 @@ class Controller(Generic[Context]):
         )
         async def find_scrollable_ancestor(params: FindScrollableAncestorAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
-            # Find the target node first
-            target_node = None
-            for node in all_nodes:
-                if node.unique_id == params.unique_id:
-                    target_node = node
-                    break
+            # Find the target node using selector map
+            target_node = node_state.selector_map.get(params.unique_id)
                     
             if not target_node:
                 error_msg = f"No widget found with unique_id: {params.unique_id}"
@@ -202,14 +198,10 @@ class Controller(Generic[Context]):
         )
         async def find_scrollable_descendant(params: FindScrollableDescendantAction, app: App):
             # Get the current app state
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
-            # Find the target node first
-            target_node = None
-            for node in all_nodes:
-                if node.unique_id == params.unique_id:
-                    target_node = node
-                    break
+            # Find the target node using selector map
+            target_node = node_state.selector_map.get(params.unique_id)
                     
             if not target_node:
                 error_msg = f"No widget found with unique_id: {params.unique_id}"
@@ -230,22 +222,22 @@ class Controller(Generic[Context]):
             param_model=GetAppStateAction,
         )
         async def get_app_state(params: GetAppStateAction, app: App):
-            all_nodes = app.get_app_state()
+            node_state = app.get_app_state()
             
             # Format nodes for display
             node_info = []
-            for node in all_nodes:
+            for uid, node in node_state.selector_map.items():
                 info = {
                     "unique_id": node.unique_id,
-                    "widget_type": node.widget_type,
-                    "is_interactive": node.is_interactive,
-                    "text": node.text,
-                    "key": node.key,
+                    "widget_type": getattr(node, 'widget_type', 'TextNode') if hasattr(node, 'widget_type') else 'TextNode',
+                    "is_interactive": getattr(node, 'is_interactive', False) if hasattr(node, 'is_interactive') else False,
+                    "text": node.text if hasattr(node, 'text') else None,
+                    "key": getattr(node, 'key', None) if hasattr(node, 'key') else None,
                     "parent": node.parent_node.unique_id if node.parent_node else None,
                 }
                 node_info.append(info)
             
-            msg = f"Retrieved app state with {len(all_nodes)} nodes:\n{str(node_info)}"
+            msg = f"Retrieved app state with {len(node_state.selector_map)} nodes:\n{str(node_info)}"
             return ActionResult(extracted_content=msg, include_in_memory=True)
 
     # Register ---------------------------------------------------------------

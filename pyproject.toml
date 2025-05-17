@@ -8,10 +8,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "app_use"
 dynamic = ["version"]
-description = "A library for controlling Flutter applications via the Dart VM Service"
+description = "A library for controlling mobile applications via native debugging bridges"
 readme = "README.md"
 authors = [
-    {name = "Erick Torres"},
+    {name = "Erick Torres-Moreno"},
 ]
 license = {text = "MIT"}
 classifiers = [

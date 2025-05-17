@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import json
+import time
 import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Dict
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from openai import RateLimitError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
+from app_use.agent.message_manager.views import MessageManagerState
 from app_use.controller.views import ActionModel, ActionResult
+from app_use.nodes.app_node import NodeState, AppBaseNode
 
 ToolCallingMethod = Literal['function_calling', 'json_mode', 'raw', 'auto', 'tools']
 REQUIRED_LLM_API_ENV_VARS = {
@@ -55,7 +58,7 @@ class AgentState(BaseModel):
     history: AgentHistoryList = Field(default_factory=lambda: AgentHistoryList(history=[]))
     paused: bool = False
     stopped: bool = False
-    message_manager_state: Any = None  # Will be created once MessageManager is implemented
+    message_manager_state: MessageManagerState = Field(default_factory=MessageManagerState)
 
 
 @dataclass
@@ -122,10 +125,40 @@ class AppStateHistory(BaseModel):
     """History of app state for a step"""
     
     node_count: int
-    timestamp: float = Field(default_factory=lambda: Path.time())
+    timestamp: float = Field(default_factory=lambda: time.time())
     widget_types: list[str] = []
     interactive_widgets: int = 0
     screenshot: str | None = None
+    selector_map_size: int = 0
+    
+    @classmethod
+    def from_node_state(cls, node_state: NodeState, screenshot: str | None = None) -> 'AppStateHistory':
+        """Create AppStateHistory from a NodeState object"""
+        # Count all element nodes in the tree
+        node_count = len(node_state.selector_map)
+        
+        # Get all unique widget types
+        widget_types = []
+        interactive_count = 0
+        
+        for node_id, node in node_state.selector_map.items():
+            # Add widget type if it's an ElementNode with a widget_type attribute
+            if hasattr(node, 'widget_type'):
+                widget_type = getattr(node, 'widget_type')
+                if widget_type not in widget_types:
+                    widget_types.append(widget_type)
+                
+                # Count interactive widgets
+                if hasattr(node, 'is_interactive') and getattr(node, 'is_interactive'):
+                    interactive_count += 1
+        
+        return cls(
+            node_count=node_count,
+            widget_types=widget_types,
+            interactive_widgets=interactive_count,
+            screenshot=screenshot,
+            selector_map_size=len(node_state.selector_map)
+        )
 
 
 class AgentHistory(BaseModel):

@@ -29,7 +29,7 @@ logging.basicConfig(level=logging.DEBUG)
 async def main():
     # WebSocket URI for a running Flutter app
     # This is typically output in the console when running a Flutter app with --observatory
-    VM_SERVICE_URI = "ws://127.0.0.1:64824/vF1gcOo0Ce0=/ws"
+    VM_SERVICE_URI = "ws://127.0.0.1:51762/U2ICJps9mQo=/ws"
     api_key = os.getenv("GROK_API_KEY")
     
     # Set up x.ai (Grok) via OpenAI compatible API

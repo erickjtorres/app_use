@@ -1,7 +1,12 @@
 import json
 import logging
 from dart_vm_client import DartVmServiceClient
-from app_use.nodes.app_node import AppNode
+from app_use.nodes.app_node import (
+    AppElementNode,
+    AppTextNode,
+    NodeState,
+    SelectorMap,
+)
 
 logger = logging.getLogger("NodeTreeBuilder")
 
@@ -17,7 +22,7 @@ IRRELEVANT_TYPES = {
     'AnimatedDefaultTextStyle', 'IconTheme', 'IconButtonTheme', 'MediaQuery',
     'PhysicalModel', 'AnimatedPhysicalModel', 'ClipRect', 'ClipPath',
     'AnnotatedRegion<SystemUiOverlayStyle>', 'Expanded',
-    'Transform', 'DecoratedBox', 'SizedBox',
+    'Transform', 'DecoratedBox', 'SizedBox', 'InkResponse',
     
     # Redundant text variants
     'RichText'  # canonicalize to Text
@@ -77,12 +82,20 @@ class NodeTreeBuilder:
             # Set up relationships on the filtered nodes
             self._setup_sibling_relationships(relevant_nodes)
             
-            logger.info(f"Built widget tree with {len(all_nodes)} total nodes, filtered to {len(relevant_nodes)} relevant nodes")
-            return relevant_nodes
+            # Build selector map
+            selector_map: SelectorMap = {node.unique_id: node for node in relevant_nodes}
+            
+            logger.info(
+                "Built widget tree with %s total nodes, filtered to %s relevant nodes",
+                len(all_nodes),
+                len(relevant_nodes),
+            )
+            
+            return NodeState(element_tree=root_node, selector_map=selector_map)
             
         except Exception as e:
-            logger.error(f"Error building widget tree: {str(e)}")
-            return self._build_widget_tree_fallback(object_group)
+                logger.error(f"Error building widget tree: {str(e)}")
+        return self._build_widget_tree_fallback(object_group)
 
     def _build_widget_tree_fallback(self, object_group):
         """Fallback method to get widget tree using other methods"""
@@ -135,8 +148,15 @@ class NodeTreeBuilder:
                     relevant_nodes = self._filter_relevant_nodes(all_nodes)
                     self._setup_sibling_relationships(relevant_nodes)
                     
-                    logger.info(f"Built widget tree using fallback with {len(all_nodes)} total nodes, filtered to {len(relevant_nodes)} relevant nodes")
-                    return relevant_nodes
+                    selector_map: SelectorMap = {node.unique_id: node for node in relevant_nodes}
+                    
+                    logger.info(
+                        "Built widget tree using fallback with %s total nodes, filtered to %s relevant nodes",
+                        len(all_nodes),
+                        len(relevant_nodes),
+                    )
+                    
+                    return NodeState(element_tree=root_node, selector_map=selector_map)
                 except Exception as e:
                     logger.error(f"Error parsing details tree: {str(e)}")
                     return []
@@ -147,8 +167,16 @@ class NodeTreeBuilder:
                 all_nodes = self._collect_all_nodes(root_node)
                 relevant_nodes = self._filter_relevant_nodes(all_nodes)
                 self._setup_sibling_relationships(relevant_nodes)
-                logger.info(f"Built widget tree using fallback with {len(all_nodes)} total nodes, filtered to {len(relevant_nodes)} relevant nodes")
-                return relevant_nodes
+                
+                selector_map: SelectorMap = {node.unique_id: node for node in relevant_nodes}
+                
+                logger.info(
+                    "Built widget tree using fallback with %s total nodes, filtered to %s relevant nodes",
+                    len(all_nodes),
+                    len(relevant_nodes),
+                )
+                
+                return NodeState(element_tree=root_node, selector_map=selector_map)
             
             return []
         
@@ -162,7 +190,7 @@ class NodeTreeBuilder:
         self._id_counter += 1
 
         if not isinstance(widget_data, dict):
-            return AppNode(
+            return AppElementNode(
                 unique_id=current_unique_id, # Use sequential ID
                 widget_type="Unknown",
                 is_interactive=False,
@@ -236,7 +264,6 @@ class NodeTreeBuilder:
                       not clean_widget_type in IRRELEVANT_TYPES) or \
                      text is not None or \
                      key is not None or \
-                     is_interactive or \
                      properties.get('createdByLocalProject', False)
                      
         if not is_relevant:
@@ -260,16 +287,23 @@ class NodeTreeBuilder:
             # For simplicity, we'll return the first relevant child
             return children_nodes[0]
         
-        # Create the node
-        node = AppNode(
-            unique_id=current_unique_id, # Use sequential ID
-            widget_type=clean_widget_type,
-            is_interactive=is_interactive,
-            properties=properties,
-            parent_node=parent,
-            text=text,
-            key=key
-        )
+        # Decide if this should be a Text node
+        if clean_widget_type == "Text" and text is not None and not widget_data.get("children"):
+            node: AppElementNode | AppTextNode = AppTextNode(
+                unique_id=current_unique_id,
+                text=text,
+                parent=parent,
+            )
+        else:
+            node = AppElementNode(
+                unique_id=current_unique_id, # Use sequential ID
+                widget_type=clean_widget_type,
+                is_interactive=is_interactive,
+                properties=properties,
+                parent_node=parent,
+                text=text,
+                key=key
+            )
         
         # Process children if they exist
         if 'children' in widget_data and isinstance(widget_data['children'], list):
@@ -342,51 +376,63 @@ class NodeTreeBuilder:
         
         # Check description for keywords
         description = properties.get('description', '')
-        if any(keyword in description for keyword in ['Search', 'Button', 'TextField', 'Card', 'Tile', 'Bar']):
+        if any(keyword in description for keyword in ['Search', 'Button', 'Card', 'Input', 'Field', 'Select', 'Click', 'Tap',
+            'Toggle', 'Slide', 'Scroll', 'Dropdown', 'Menu', 'Navigation', 'Home',
+            'Profile', 'Category', 'Product', 'Item', 'Bar', 'Icon', 'Tab', 'List',
+            'Tile', 'Link'
+        ]):
             return True
         
-        # Known interactive widget types
+        
         interactive_widgets = [
-            # Buttons
-            'Button', 'TextButton', 'ElevatedButton', 'OutlinedButton', 'IconButton',
-            'FloatingActionButton', 'CupertinoButton', 'BackButton', 'CloseButton',
-            
-            # Input fields
-            'TextField', 'TextFormField', 'CupertinoTextField',
-            
-            # Selection widgets
-            'Checkbox', 'Radio', 'Switch', 'Slider', 'RangeSlider', 'DropdownButton',
-            'PopupMenuButton', 'ToggleButtons', 'CupertinoSwitch', 'CupertinoPicker',
-            
-            # Interactive containers
-            'GestureDetector', 'InkWell', 'InkResponse', 'Draggable', 'LongPressDraggable',
-            'DragTarget', 'Dismissible',
-            
-            # Navigation
-            'TabBar', 'BottomNavigationBar', 'NavigationBar', 'NavigationRail', 'Drawer',
-            'CupertinoTabBar', 'CupertinoNavigationBar',
-            
-            # Cards and tiles
-            'ListTile', 'CheckboxListTile', 'RadioListTile', 'SwitchListTile', 'ExpansionTile',
-            'Card', 'ActionChip', 'FilterChip', 'ChoiceChip', 'InputChip',
-            
-            # Scrollable
-            'Scrollable', 'ScrollView', 'ListView', 'GridView', 'PageView',
-            'CustomScrollView', 'SingleChildScrollView', 'ReorderableListView',
-            
-            # Search and app bars
-            'SearchBar', 'AppBar', 'SliverAppBar', 'CupertinoSearchTextField',
-            
-            # Form elements
-            'Form', 'FormField',
-            
-            # Date and time pickers
-            'DatePicker', 'TimePicker', 'CupertinoDatePicker',
-            
-            # Custom UI components that might be interactive
-            'BottomSheet', 'Dialog', 'AlertDialog', 'SimpleDialog', 'CupertinoAlertDialog',
-            'Scaffold', 'SnackBar', 'RefreshIndicator', 'Tooltip'
-        ]
+    # Buttons
+    'Button', 'TextButton', 'ElevatedButton', 'OutlinedButton', 'IconButton',
+    'FloatingActionButton', 'CupertinoButton', 'BackButton', 'CloseButton',
+    'FilledButton',
+    
+    # Input fields
+    'TextField', 'TextFormField', 'CupertinoTextField', 'CupertinoSearchField',
+    
+    # Selection widgets
+    'Checkbox', 'Radio', 'Switch', 'Slider', 'RangeSlider', 'DropdownButton',
+    'PopupMenuButton', 'ToggleButtons', 'CupertinoSwitch', 'CupertinoPicker',
+    'MenuAnchor', 'DropdownMenu',
+    
+    # Interactive containers
+    'GestureDetector', 'InkWell', 'InkResponse', 'Draggable', 'LongPressDraggable',
+    'DragTarget', 'Dismissible', 'ExpansionPanel', 'DraggableScrollableSheet',
+    'Carousel', 'InteractiveViewer',
+    
+    # Navigation
+    'TabBar', 'BottomNavigationBar', 'NavigationBar', 'NavigationRail', 'Drawer',
+    'CupertinoTabBar', 'CupertinoNavigationBar',
+    
+    # Cards and tiles
+    'ListTile', 'CheckboxListTile', 'RadioListTile', 'SwitchListTile', 'ExpansionTile',
+    'Card', 'ActionChip', 'FilterChip', 'ChoiceChip', 'InputChip',
+    
+    # Scrollable
+    'Scrollable', 'ScrollView', 'ListView', 'GridView', 'PageView',
+    'CustomScrollView', 'SingleChildScrollView', 'ReorderableListView',
+    'Scrollbar',
+    
+    # Search and app bars
+    'SearchBar', 'AppBar', 'SliverAppBar', 'CupertinoSearchTextField',
+    'SearchAnchor',
+    
+    # Form elements
+    'Form', 'FormField',
+    
+    # Date and time pickers
+    'DatePicker', 'TimePicker', 'CupertinoDatePicker', 'CalendarDatePicker',
+    
+    # Text selection
+    'SelectableText',
+    
+    # Custom UI components that might be interactive
+    'BottomSheet', 'Dialog', 'AlertDialog', 'SimpleDialog', 'CupertinoAlertDialog',
+    'Scaffold', 'SnackBar', 'RefreshIndicator', 'Tooltip'
+]
         
         # Check if the widget type matches any known interactive widget
         if any(interactive in widget_type for interactive in interactive_widgets):
@@ -449,32 +495,35 @@ class NodeTreeBuilder:
         """Filter the widget nodes to only include relevant ones"""
         if not nodes:
             return []
-            
+        
         result = []
         for node in nodes:
-            # Skip any widgets that start with underscore (implementation details)
-            if node.widget_type.startswith('_'):
-                continue
                 
-            # Skip irrelevant widget types unless they have important content
-            if node.widget_type in IRRELEVANT_TYPES and not (
-                node.text or 
-                node.key or 
-                node.is_interactive or 
-                node.properties.get('createdByLocalProject', False)
-            ):
-                continue
+            # For AppElementNode instances, apply filtering
+            if hasattr(node, 'widget_type'):
+                # Skip any widgets that start with underscore (implementation details)
+                if node.widget_type.startswith('_'):
+                    continue
+                    
+                # Skip irrelevant widget types unless they have important content
+                if node.widget_type in IRRELEVANT_TYPES and not (
+                    node.text or 
+                    node.key or 
+                    node.is_interactive or 
+                    node.properties.get('createdByLocalProject', False)
+                ):
+                    continue
+                    
+                # Apply canonicalization
+                if node.widget_type in CANONICAL_NAMES:
+                    node.widget_type = CANONICAL_NAMES[node.widget_type]
                 
-            # Apply canonicalization
-            if node.widget_type in CANONICAL_NAMES:
-                node.widget_type = CANONICAL_NAMES[node.widget_type]
-                
-            # Add the node to the result
-            result.append(node)
-            
+                # Add the node to the result
+                result.append(node)
+        
         logger.info(f"Filtered widget tree from {len(nodes)} to {len(result)} relevant nodes")
         return result
-    
+
     def dispose(self, object_group="flutter"):
         """Clean up resources"""
         try:

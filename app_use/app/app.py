@@ -1,4 +1,5 @@
 from app_use.nodes.node_tree_builder import NodeTreeBuilder
+from app_use.nodes.app_node import NodeState, AppBaseNode, AppElementNode
 from dart_vm_client import DartVmServiceManager, DartVmServiceClient
 import atexit
 
@@ -45,35 +46,32 @@ class App:
             
         self.app_state = {}
         
-    def get_app_state(self):
+    def get_app_state(self) -> NodeState:
         """
         Get the current state of the app
-        """
         
+        Returns:
+            NodeState: A NodeState object containing the element tree and selector map
+        """
         builder = NodeTreeBuilder(self.client)
-
-        all_nodes = builder.build_widget_tree("flutter")
-        return all_nodes
+        node_state = builder.build_widget_tree("flutter")
+        return node_state
     
-    def enter_text_with_unique_id(self, all_nodes, unique_id, text):
+    def enter_text_with_unique_id(self, node_state: NodeState, unique_id: int, text: str) -> bool:
         """
         Finds a widget by its unique_id and triggers a text entry action, 
         prioritizing enter_text_by_ancestor_and_descendant method
         
         Args:
-            all_nodes: List of AppNode objects from the widget tree
+            node_state: NodeState object containing the element tree and selector map
             unique_id: The unique identifier of the widget to enter text
             text: The text to enter
         
         Returns:
             Boolean indicating success or failure
         """
-        # Find the node with the matching unique_id
-        target_node = None
-        for node in all_nodes:
-            if node.unique_id == unique_id:
-                target_node = node
-                break
+        # Find the node with the matching unique_id using the selector map
+        target_node = node_state.selector_map.get(unique_id)
             
         if not target_node:
             print(f"No widget found with unique_id: {unique_id}")
@@ -165,25 +163,20 @@ class App:
         return False
     
     
-    def click_widget_by_unique_id(self, all_nodes, unique_id: int):
+    def click_widget_by_unique_id(self, node_state: NodeState, unique_id: int) -> bool:
         """
         Finds a widget by its unique_id and triggers a tap action, 
         prioritizing tap_widget_by_ancestor_and_descendant method
         
         Args:
-            client: DartVmServiceClient instance
-            all_nodes: List of AppNode objects from the widget tree
+            node_state: NodeState object containing the element tree and selector map
             unique_id: The unique identifier of the widget to click
         
         Returns:
             Boolean indicating success or failure
         """
-        # Find the node with the matching unique_id
-        target_node = None
-        for node in all_nodes:
-            if node.unique_id == unique_id:
-                target_node = node
-                break
+        # Find the node with the matching unique_id using the selector map
+        target_node = node_state.selector_map.get(unique_id)
             
         if not target_node:
             print(f"No widget found with unique_id: {unique_id}")
@@ -251,28 +244,24 @@ class App:
         # If all attempts fail, check if there's an interactive parent we could tap instead
         if target_node.parent_node and target_node.parent_node.is_interactive:
             print(f"Current widget couldn't be tapped, trying parent: {target_node.parent_node.widget_type}")
-            return self.click_widget_by_unique_id(all_nodes, target_node.parent_node.unique_id)
+            return self.click_widget_by_unique_id(node_state, target_node.parent_node.unique_id)
         
         print(f"Failed to click on widget with unique_id: {unique_id}")
         return False
 
-    def scroll_into_view(self, all_nodes, unique_id):
+    def scroll_into_view(self, node_state: NodeState, unique_id: int) -> bool:
         """
         Scroll a widget into view by trying different methods in order of expected reliability.
 
         Args:
-            all_nodes: List of AppNode objects from the widget tree
+            node_state: NodeState object containing the element tree and selector map
             unique_id: The unique identifier of the widget to scroll into view
 
         Returns:
             Boolean indicating success or failure
         """
-        # Find the node with the matching unique_id
-        target_node = None
-        for node in all_nodes:
-            if node.unique_id == unique_id:
-                target_node = node
-                break
+        # Find the node with the matching unique_id using the selector map
+        target_node = node_state.selector_map.get(unique_id)
 
         if not target_node:
             print(f"No widget found with unique_id: {unique_id}")
@@ -343,24 +332,20 @@ class App:
         print(f"Failed to scroll into view for widget with unique_id: {unique_id}")
         return False
 
-    def scroll_up_or_down(self, all_nodes, unique_id, direction="down"):
+    def scroll_up_or_down(self, node_state: NodeState, unique_id: int, direction: str = "down") -> bool:
         """
         Scroll a widget up or down by trying different methods in order of expected reliability.
 
         Args:
-            all_nodes: List of AppNode objects from the widget tree
+            node_state: NodeState object containing the element tree and selector map
             unique_id: The unique identifier of the widget to scroll
             direction: "up" or "down" scroll direction
 
         Returns:
             Boolean indicating success or failure
         """
-        # Find the node with the matching unique_id
-        target_node = None
-        for node in all_nodes:
-            if node.unique_id == unique_id:
-                target_node = node
-                break
+        # Find the node with the matching unique_id using the selector map
+        target_node = node_state.selector_map.get(unique_id)
 
         if not target_node:
             print(f"No widget found with unique_id: {unique_id}")
@@ -446,12 +431,12 @@ class App:
         print(f"Failed to scroll {direction} for widget with unique_id: {unique_id}")
         return False
 
-    def scroll_up_or_down_extended(self, all_nodes, unique_id, direction="down", dx=0, dy=100, duration_microseconds=300000, frequency=60):
+    def scroll_up_or_down_extended(self, node_state: NodeState, unique_id: int, direction: str = "down", dx: int = 0, dy: int = 100, duration_microseconds: int = 300000, frequency: int = 60) -> bool:
         """
         Scroll a widget up or down with extended parameters by trying different methods in order of expected reliability.
 
         Args:
-            all_nodes: List of AppNode objects from the widget tree
+            node_state: NodeState object containing the element tree and selector map
             unique_id: The unique identifier of the widget to scroll
             direction: "up" or "down" scroll direction
             dx: Horizontal scroll amount (positive = right, negative = left)
@@ -468,12 +453,8 @@ class App:
         elif direction == "down" and dy < 0:
             dy = -dy
 
-        # Find the node with the matching unique_id
-        target_node = None
-        for node in all_nodes:
-            if node.unique_id == unique_id:
-                target_node = node
-                break
+        # Find the node with the matching unique_id using the selector map
+        target_node = node_state.selector_map.get(unique_id)
 
         if not target_node:
             print(f"No widget found with unique_id: {unique_id}")
@@ -559,7 +540,7 @@ class App:
         print(f"Failed to scroll {direction} with extended parameters for widget with unique_id: {unique_id}")
         return False
 
-    def find_ancestor_with_scroll(self, node):
+    def find_ancestor_with_scroll(self, node: AppElementNode):
         """
         Find the closest ancestor of a node that is likely to be scrollable.
         
@@ -601,7 +582,7 @@ class App:
         # No scrollable ancestor found
         return None
         
-    def find_descendant_with_scroll(self, node):
+    def find_descendant_with_scroll(self, node: AppElementNode):
         """
         Find the first descendant of a node that is likely to be scrollable.
         

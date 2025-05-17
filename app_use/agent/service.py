@@ -18,6 +18,9 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, ValidationError
 
+from app_use.agent.message_manager.service import MessageManager, MessageManagerSettings
+from app_use.agent.message_manager.utils import convert_input_messages, save_conversation, is_model_without_tool_support
+
 from app_use.agent.views import (
     REQUIRED_LLM_API_ENV_VARS,
     ActionResult,
@@ -33,6 +36,7 @@ from app_use.agent.views import (
     StepMetadata,
     ToolCallingMethod,
 )
+from app_use.nodes.app_node import NodeState
 from app_use.app.app import App
 
 from app_use.controller.service import Controller
@@ -77,7 +81,7 @@ class Agent(Generic[Context]):
         sensitive_data: dict[str, str] | None = None,
         initial_actions: list[dict[str, dict[str, Any]]] | None = None,
         # Agent settings
-        use_vision: bool = True,
+        use_vision: bool = False,
         save_conversation_path: str | None = None,
         save_conversation_path_encoding: str | None = 'utf-8',
         max_failures: int = 3,
@@ -124,11 +128,37 @@ class Agent(Generic[Context]):
 
         # Action setup
         self._setup_action_models()
-        self.initial_actions = self._convert_initial_actions(initial_actions) if initial_actions else None
-
+        
         # Model setup
         self._set_model_names()
         self.tool_calling_method = self._set_tool_calling_method()
+        
+        # Verify we can connect to the LLM
+        self._verify_llm_connection()
+        
+        # Initialize available actions for system prompt
+        self.unfiltered_actions = self.controller.registry.get_prompt_description()
+        
+        self.settings.message_context = self._set_message_context()
+        
+        # Initialize message manager with state
+        # Get system prompt from a generator function or class (we need to implement this)
+        system_message = self._get_system_message()
+        
+        self._message_manager = MessageManager(
+            task=task,
+            system_message=system_message,
+            settings=MessageManagerSettings(
+                max_input_tokens=self.settings.max_input_tokens,
+                include_attributes=self.settings.include_attributes if hasattr(self.settings, 'include_attributes') else [],
+                message_context=self.settings.message_context,
+                sensitive_data=sensitive_data,
+                available_file_paths=None,
+            ),
+            state=self.state.message_manager_state,
+        )
+        
+        self.initial_actions = self._convert_initial_actions(initial_actions) if initial_actions else None
 
         # Verify we can connect to the LLM
         self._verify_llm_connection()
@@ -152,6 +182,35 @@ class Agent(Generic[Context]):
             else:
                 self.settings.message_context = f'Available actions: {self.unfiltered_actions}'
         return self.settings.message_context
+        
+    def _get_system_message(self) -> SystemMessage:
+        """Generate the system message for the agent"""
+        # Here you could call a system prompt generator class or function
+        # For now, we'll just create a basic system message
+        
+        action_description = self.controller.registry.get_prompt_description()
+        
+        system_content = f"""
+        You are an AI assistant that helps users interact with mobile applications.
+        Your task is to help the user achieve their goal by interacting with the app.
+        You can use the following actions to interact with the app:
+        
+        {action_description}
+        
+        When analyzing the app state:
+        1. First understand what widgets are available and their functions
+        2. Consider which widgets are interactive and can be tapped, swiped, or typed into
+        3. Choose the appropriate action based on the current state and goal
+        4. Always provide clear explanations of what you're doing and why
+        """
+        
+        # Add any custom overrides or extensions
+        if self.settings.override_system_message:
+            system_content = self.settings.override_system_message
+        elif self.settings.extend_system_message:
+            system_content += f"\n\n{self.settings.extend_system_message}"
+            
+        return SystemMessage(content=system_content.strip())
 
     def _set_model_names(self) -> None:
         self.chat_model_library = self.llm.__class__.__name__
@@ -207,79 +266,100 @@ class Agent(Generic[Context]):
         app_state = None
 
         try:
-            # Get the current app state
-            all_nodes = self.app.get_app_state()
+            # Get the current app state as NodeState
+            node_state = self.app.get_app_state()
             
-            # Create AppStateHistory based on current state
-            app_state = AppStateHistory(
-                node_count=len(all_nodes),
-                widget_types=[node.widget_type for node in all_nodes[:10]],  # sample of widget types
-                interactive_widgets=sum(1 for node in all_nodes if node.is_interactive),
-                timestamp=time.time(),
-                # screenshot is not implemented yet
-            )
-
+            # Create AppStateHistory using the class method
+            app_state = AppStateHistory.from_node_state(node_state)
+            
             await self._raise_if_stopped_or_paused()
 
-            # TODO: Implement message manager and update this section
-            # self._message_manager.add_state_message(...)
+            # Use MessageManager to add state message with app state and previous results
+            self._message_manager.add_state_message(
+                node_state=node_state,
+                result=self.state.last_result,
+                step_info=step_info,
+                use_vision=self.settings.use_vision
+            )
             
+            # If this is the last step, add a message to use 'done' action
             if step_info and step_info.is_last_step():
-                # Add last step warning
+                # Add last step warning if needed
+                msg = 'Now comes your last step. Use only the "done" action now. No other actions - so here your action sequence must have length 1.'
+                msg += '\nIf the task is not yet fully finished as requested by the user, set success in "done" to false!'
+                msg += '\nIf the task is fully finished, set success in "done" to true.'
+                msg += '\nInclude everything you found out for the ultimate task in the done text.'
                 logger.info('Last step finishing up')
-                # TODO: Add message to message manager
-                self.AgentOutput = self.DoneAgentOutput
+                self._message_manager._add_message_with_tokens(HumanMessage(content=msg))
+                
+                # Force the action model to only include done action
+                self.ActionModel = self.controller.registry.create_action_model(include_actions=['done'])
+                self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
 
-            # TODO: Get input messages from message manager
-            input_messages = [
-                SystemMessage(content=f"You are a helpful assistant controlling a Flutter app. Your task is: {self.task}. Once you have retrieved the app state, finish by using the 'done' action."),
-                HumanMessage(content=f"Current app state: {len(all_nodes)} nodes, {sum(1 for node in all_nodes if node.is_interactive)} interactive widgets")
-            ]
-            
-            # Include previous action result for context (mimicking browser_use memory)
-            if self.state.last_result:
-                last = self.state.last_result[-1]
-                if last.extracted_content:
-                    input_messages.append(HumanMessage(content=f"Previous action result: {last.extracted_content}"))
-
-            # Simple token count for now
-            tokens = sum(len(msg.content) for msg in input_messages) // 4  # rough estimate
+            # Get all messages from message manager
+            input_messages = self._message_manager.get_messages()
+            tokens = self._message_manager.state.history.current_tokens
 
             try:
+                # Get the model's next action based on current state
                 model_output = await self.get_next_action(input_messages)
                 
+                # Check for empty actions and handle them
+                if (
+                    not model_output.action
+                    or not isinstance(model_output.action, list)
+                    or all(action.model_dump() == {} for action in model_output.action)
+                ):
+                    logger.warning('Model returned empty action. Retrying...')
+
+                    clarification_message = HumanMessage(
+                        content='You forgot to return an action. Please respond only with a valid JSON action according to the expected format.'
+                    )
+
+                    retry_messages = input_messages + [clarification_message]
+                    model_output = await self.get_next_action(retry_messages)
+
+                    if not model_output.action or all(action.model_dump() == {} for action in model_output.action):
+                        logger.warning('Model still returned empty after retry. Inserting safe noop action.')
+                        action_instance = self.ActionModel(
+                            done={
+                                'success': False,
+                                'text': 'No next action returned by LLM!',
+                            }
+                        )
+                        model_output.action = [action_instance]
+
                 # Check again for paused/stopped state after getting model output
                 await self._raise_if_stopped_or_paused()
 
+                # Increment step counter
                 self.state.n_steps += 1
 
+                # Save conversation if path is specified
                 if self.settings.save_conversation_path:
                     target = self.settings.save_conversation_path + f'_{self.state.n_steps}.txt'
-                    # TODO: Implement save_conversation function
-                    # save_conversation(input_messages, model_output, target, self.settings.save_conversation_path_encoding)
+                    save_conversation(input_messages, model_output, target, self.settings.save_conversation_path_encoding)
 
-                # TODO: Message manager handling
-                # self._message_manager._remove_last_state_message()
-                # self._message_manager.add_model_output(model_output)
-                
+                # Remove the last state message from history (we don't want to keep the whole state)
+                self._message_manager._remove_last_state_message()
+
+                # Add model output to message history
+                self._message_manager.add_model_output(model_output)
             except asyncio.CancelledError:
-                # Task was cancelled
-                # TODO: Message manager cleanup
-                # self._message_manager._remove_last_state_message()
+                # Task was cancelled due to Ctrl+C
+                self._message_manager._remove_last_state_message()
                 raise InterruptedError('Model query cancelled by user')
             except InterruptedError:
                 # Agent was paused during get_next_action
-                # TODO: Message manager cleanup
-                # self._message_manager._remove_last_state_message()
+                self._message_manager._remove_last_state_message()
                 raise  # Re-raise to be caught by the outer try/except
             except Exception as e:
-                # model call failed
-                # TODO: Message manager cleanup
-                # self._message_manager._remove_last_state_message()
+                # Model call failed, remove last state message from history
+                self._message_manager._remove_last_state_message()
                 raise e
 
-            result: list[ActionResult] = await self.multi_act(model_output.action)
-
+            # Execute the model's action(s)
+            result = await self.multi_act(model_output.action)
             self.state.last_result = result
 
             if len(result) > 0 and result[-1].is_done:
@@ -288,13 +368,16 @@ class Agent(Generic[Context]):
             self.state.consecutive_failures = 0
 
         except InterruptedError:
+            logger.debug('Agent paused')
             self.state.last_result = [
                 ActionResult(
-                    error='The agent was paused mid-step - the last action might need to be repeated', include_in_memory=False
+                    error='The agent was paused mid-step - the last action might need to be repeated', 
+                    include_in_memory=False
                 )
             ]
             return
         except asyncio.CancelledError:
+            # Directly handle the case where the step is cancelled at a higher level
             self.state.last_result = [ActionResult(error='The agent was paused with Ctrl+C', include_in_memory=False)]
             raise InterruptedError('Step cancelled by user')
         except Exception as e:
@@ -424,61 +507,42 @@ class Agent(Generic[Context]):
                 tool_call_name = tool_call['name']
                 tool_call_args = tool_call['args']
 
-                current_state = {
-                    'evaluation_previous_goal': 'Executing action',
-                    'memory': 'Using tool call',
-                    'next_goal': f'Execute {tool_call_name}',
-                }
+                current_state = AgentBrain(
+                    evaluation_previous_goal='Executing action',
+                    memory='Using tool call',
+                    next_goal=f'Execute {tool_call_name}',
+                )
 
                 # Create action from tool call
                 action = {tool_call_name: tool_call_args}
 
-                parsed = self.AgentOutput(current_state=AgentBrain(**current_state), action=[self.ActionModel(**action)])
+                parsed = self.AgentOutput(current_state=current_state, action=[self.ActionModel(**action)])
             else:
-                parsed = None
+                try:
+                    raw_output = response['raw'].content
+                    parsed_json = extract_json_from_model_output(raw_output)
+                    parsed = self.AgentOutput(**parsed_json)
+                except Exception as e:
+                    logger.warning(f'Failed to parse model output: {response["raw"].content} {str(e)}')
+                    if 'raw' in response:
+                        logger.warning(f'Raw output: {response["raw"]}')
+                    raise ValueError('Could not parse response.')
         else:
             parsed = response['parsed']
-
-        if not parsed:
-            try:
-                parsed_json = self._extract_json_from_model_output(response['raw'].content)
-                parsed = self.AgentOutput(**parsed_json)
-            except Exception as e:
-                logger.warning(f'Failed to parse model output: {response["raw"].content} {str(e)}')
-                raise ValueError('Could not parse response.')
 
         # Cut the number of actions to max_actions_per_step if needed
         if len(parsed.action) > self.settings.max_actions_per_step:
             parsed.action = parsed.action[: self.settings.max_actions_per_step]
 
-        if not (hasattr(self.state, 'paused') and (self.state.paused or self.state.stopped)):
-            log_response(parsed)
+        # Log the response 
+        log_response(parsed)
 
         return parsed
 
-    def _extract_json_from_model_output(self, content: str) -> dict:
-        """Extract JSON from model output, handling various formats."""
-        # Try to find JSON-like structure in the content
-        json_pattern = r'(?s)(\{.*\})'
-        matches = re.search(json_pattern, content)
-        
-        if matches:
-            json_str = matches.group(1)
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                # Try some common cleanup operations
-                # Replace single quotes with double quotes
-                json_str = json_str.replace("'", '"')
-                # Ensure property names are properly quoted
-                json_str = re.sub(r'(\w+):', r'"\1":', json_str)
-                try:
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
-                    pass
-        
-        # If we can't find valid JSON, raise an error
-        raise ValueError(f"Could not extract valid JSON from: {content}")
+    @property
+    def message_manager(self) -> MessageManager:
+        """Get the message manager instance"""
+        return self._message_manager
 
     async def multi_act(self, actions: list[Any]) -> list[ActionResult]:
         """Execute multiple actions"""
